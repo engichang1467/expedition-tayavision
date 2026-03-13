@@ -51,6 +51,8 @@ def train(
 ):
     model.train()
     accumulated_loss = 0.0
+    accumulated_ce_loss = 0.0
+    accumulated_align_reg_loss = 0.0
 
     for epoch in range(training_config.num_epochs):
         for step, batch in enumerate(dataloader, start=step_offset):
@@ -68,9 +70,21 @@ def train(
                     pixel_values=pixel_values,
                     labels=labels,
                 )
-                loss = outputs.loss / training_config.grad_acc_steps
+                ce_loss = outputs.loss / training_config.grad_acc_steps
+
+                token_embeddings = model.language_model.get_input_embeddings().weight # (vocab size, D)
+                image_hidden_states = outputs.image_hidden_states # (B, V, D)
+
+                align_reg_loss = (token_embeddings.mean(dim=0) - image_hidden_states.mean(dim=(0, 1))).square().sum() \
+                                + (token_embeddings.std(dim=0) - image_hidden_states.std(dim=(0, 1))).square().sum()
+                align_reg_loss /= training_config.grad_acc_steps
+                
+            loss = ce_loss + training_config.embed_align_reg * align_reg_loss
             loss.backward()
+
             accumulated_loss += loss.item()
+            accumulated_ce_loss += ce_loss.item()
+            accumulated_align_reg_loss += align_reg_loss.item()
 
             if (step + 1) % training_config.grad_acc_steps == 0:
                 grad_norm = torch.nn.utils.clip_grad_norm_(model.multi_modal_projector.parameters(), training_config.max_grad_norm)
@@ -84,6 +98,8 @@ def train(
                 projector_output_norms.clear()
                 wandb.log({
                     "train/loss": accumulated_loss,
+                    "train/ce_loss": accumulated_ce_loss,
+                    "train/align_reg_loss": accumulated_align_reg_loss,
                     "train/grad_norm": grad_norm.item(),
                     "train/lr": lr_scheduler.get_last_lr()[0],
                     "train/projector_output_norm": avg_projector_norm,
@@ -97,6 +113,8 @@ def train(
                     save_checkpoint(checkpoint_dir, step + 1, model, optimizer, lr_scheduler)
 
                 accumulated_loss = 0.0
+                accumulated_ce_loss = 0.0
+                accumulated_align_reg_loss = 0.0
 
     save_checkpoint(checkpoint_dir, step + 1, model, optimizer, lr_scheduler)
     print("Training complete")
