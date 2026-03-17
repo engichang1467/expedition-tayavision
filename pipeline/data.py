@@ -38,17 +38,31 @@ class AlignmentDataset(torch.utils.data.Dataset):
         prompt = item["conversations"][0]["value"]
         response = item["conversations"][1]["value"]
 
+        tokenizer = self.processor.tokenizer
+        if tokenizer.chat_template is not None:
+            full_text = tokenizer.apply_chat_template(
+                [{"role": "user", "content": prompt}, {"role": "assistant", "content": response}],
+                tokenize=False,
+                add_generation_prompt=False,
+            )
+            prompt_text = tokenizer.apply_chat_template(
+                [{"role": "user", "content": prompt}],
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+        else:
+            full_text = prompt + response
+            prompt_text = prompt
+
         processed = self.processor(
             images=image,
-            text=prompt + response,
+            text=full_text,
         )
         input_ids = processed["input_ids"].squeeze(0)
         attention_mask = processed["attention_mask"].squeeze(0)
         pixel_values = processed["pixel_values"].squeeze(0)
 
-        processed_prompt = self.processor(
-            text=prompt,
-        )
+        processed_prompt = self.processor(text=prompt_text)
         num_prompt_tokens = processed_prompt["input_ids"].shape[-1]
         labels = input_ids.clone()
         labels[:num_prompt_tokens] = -100
