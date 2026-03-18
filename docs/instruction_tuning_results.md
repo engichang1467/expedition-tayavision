@@ -10,7 +10,7 @@ Phase 2 instruction-tunes the Tiny Aya Vision model on **LLaVA-Instruct-150K** (
 |---|---|
 | SigLIP2 vision encoder | Frozen |
 | Multi-modal projector (Pixel Shuffle + SwiGLU MLP) | Trainable (initialised from Phase 1 checkpoint) |
-| Tiny Aya LLM backbone (Cohere2, 3.35B) | LoRA adapters on upper layers (base weights frozen) |
+| Tiny Aya LLM backbone (Tiny-Aya-Global) | LoRA adapters on upper layers (base weights frozen) |
 
 ### LoRA adapter configuration
 
