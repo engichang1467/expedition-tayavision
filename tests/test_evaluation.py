@@ -1,8 +1,12 @@
 """Tests for the evaluation harness setup."""
 
+import yaml
 import pytest
+from pathlib import Path
 
 from evaluation.m_arena_hard import LANGUAGES, load_arena_hard
+
+TASKS_DIR = Path(__file__).parent.parent / "evaluation" / "tasks"
 
 
 class TestMArenaHard:
@@ -122,16 +126,147 @@ class TestXMMMUTask:
         doc = {
             "question": "<image 1> What is shown?",
             "options": "['A thing', 'B thing', 'C thing', 'D thing']",
+            "question_type": "multiple-choice",
         }
         text = xmmmu_doc_to_text(doc)
         assert "<image 1>" not in text
         assert "<image>" in text
+        assert "A." in text
 
-    def test_process_results_correct(self):
-        """Correct answer scores 1.0."""
+    def test_doc_to_text_open_ended(self):
+        """Open-ended questions use a different prompt."""
+        from evaluation.tasks.xmmmu.utils import xmmmu_doc_to_text
+
+        doc = {
+            "question": "<image 1> Compute the value.",
+            "options": "[]",
+            "question_type": "open",
+        }
+        text = xmmmu_doc_to_text(doc)
+        assert "single word or phrase" in text
+        assert "A." not in text
+
+    def test_process_results_mcq_correct(self):
+        """Correct MCQ answer scores 1.0."""
         from evaluation.tasks.xmmmu.utils import xmmmu_process_results
 
-        doc = {"answer": "B"}
+        doc = {
+            "answer": "B",
+            "question_type": "multiple-choice",
+            "options": "['opt1', 'opt2', 'opt3', 'opt4']",
+        }
         results = ["B"]
         score = xmmmu_process_results(doc, results)
         assert score["exact_match"] == 1.0
+
+    def test_process_results_open_numeric(self):
+        """Open-ended numeric answer scores correctly."""
+        from evaluation.tasks.xmmmu.utils import xmmmu_process_results
+
+        doc = {"answer": "1.06", "question_type": "open", "options": "[]"}
+        results = ["1.06"]
+        assert xmmmu_process_results(doc, results)["exact_match"] == 1.0
+
+        results_wrong = ["2.5"]
+        assert xmmmu_process_results(doc, results_wrong)["exact_match"] == 0.0
+
+    def test_process_results_open_string(self):
+        """Open-ended string answer with substring match."""
+        from evaluation.tasks.xmmmu.utils import xmmmu_process_results
+
+        doc = {"answer": "embryonic", "question_type": "open", "options": "[]"}
+        results = ["The answer is embryonic"]
+        assert xmmmu_process_results(doc, results)["exact_match"] == 1.0
+
+
+class TestXMMMUBlindTask:
+    """Tests for the xMMMU blind baseline task."""
+
+    def test_utils_import(self):
+        """xMMMU blind utils import without errors."""
+        from evaluation.tasks.xmmmu.utils import xmmmu_blind_doc_to_text
+
+        assert callable(xmmmu_blind_doc_to_text)
+
+    def test_doc_to_text_strips_image_markers_mcq(self):
+        """Image markers are removed for MCQ, options formatted."""
+        from evaluation.tasks.xmmmu.utils import xmmmu_blind_doc_to_text
+
+        doc = {
+            "question": "<image 1> What is shown in <image 2>?",
+            "options": "['Red', 'Blue', 'Green', 'Yellow']",
+            "question_type": "multiple-choice",
+        }
+        text = xmmmu_blind_doc_to_text(doc)
+        assert "<image" not in text
+        assert "What is shown in" in text
+        assert "A." in text
+        assert "Blue" in text
+
+    def test_doc_to_text_open_ended(self):
+        """Open-ended samples get the correct prompt."""
+        from evaluation.tasks.xmmmu.utils import xmmmu_blind_doc_to_text
+
+        doc = {
+            "question": "What is 2+2?",
+            "options": "[]",
+            "question_type": "open",
+        }
+        text = xmmmu_blind_doc_to_text(doc)
+        assert "What is 2+2?" in text
+        assert "single word or phrase" in text
+
+MGSM_LANGUAGES = [
+    "am", "ar", "bn", "ca", "cs", "cy", "de", "el", "en", "es",
+    "eu", "fr", "gl", "gu", "ha", "hu", "ja", "km", "kn", "ko",
+    "ky", "lg", "my", "ne", "ru", "si", "sn", "sr", "st", "sw",
+    "ta", "te", "th", "ur", "uz", "vi", "wo", "xh", "yo", "zh", "zu",
+]
+
+
+class TestGlobalMGSMTask:
+    """Tests for the GlobalMGSM group task configuration."""
+
+    @pytest.fixture
+    def config(self):
+        yaml_path = TASKS_DIR / "global_mgsm" / "global_mgsm.yaml"
+        return yaml.safe_load(yaml_path.read_text())
+
+    def test_yaml_loads(self, config):
+        """GlobalMGSM group task YAML loads without errors."""
+        assert config is not None
+
+    def test_group_name(self, config):
+        """Group is named global_mgsm."""
+        assert config["group"] == "global_mgsm"
+
+    def test_all_41_languages_included(self, config):
+        """All 41 languages are present as subtasks."""
+        task_names = [t["task"] for t in config["task"]]
+        for lang in MGSM_LANGUAGES:
+            assert f"global_mgsm_direct_{lang}" in task_names
+
+    def test_language_count(self, config):
+        """Exactly 41 language subtasks are defined."""
+        assert len(config["task"]) == len(MGSM_LANGUAGES)
+
+    def test_aggregate_metric(self, config):
+        """exact_match is the aggregate metric."""
+        metrics = [m["metric"] for m in config["aggregate_metric_list"]]
+        assert "exact_match" in metrics
+
+    def test_per_language_yaml_exists(self):
+        """Each language has its own task YAML file."""
+        for lang in MGSM_LANGUAGES:
+            yaml_path = TASKS_DIR / "global_mgsm" / f"global_mgsm_direct_{lang}.yaml"
+            assert yaml_path.exists(), f"Missing YAML for {lang}"
+            cfg = yaml.safe_load(yaml_path.read_text())
+            assert cfg["task"] == f"global_mgsm_direct_{lang}"
+            assert cfg["dataset_name"] == lang
+
+    def test_default_yaml_exists(self):
+        """Base _default_yaml template exists and has correct dataset_path."""
+        default_path = TASKS_DIR / "global_mgsm" / "_default_yaml"
+        assert default_path.exists()
+        cfg = yaml.safe_load(default_path.read_text())
+        assert cfg["dataset_path"] == "CohereLabs/global-mgsm"
