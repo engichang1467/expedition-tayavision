@@ -245,6 +245,10 @@ def _load_original_llm(model_name: str, device: str, dtype: torch.dtype) -> Dict
         device_map=device,
     )
     state = {k: v.detach().cpu() for k, v in model.state_dict().items()}
+    tied = set(getattr(model, '_tied_weights_keys', None) or [])
+    for k in tied:
+        state.pop(k, None)
+        
     del model
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
