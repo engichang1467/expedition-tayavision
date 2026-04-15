@@ -60,6 +60,25 @@ log = logging.getLogger(__name__)
 LLM_PREFIX = "language_model."
 PROJECTOR_PREFIX = "multi_modal_projector."
 
+# Weight-tying keys: safetensors deduplication may drop one side of a tied
+# pair.  We restore it so that both the original and fine-tuned state dicts
+# always present the same key set to lerp_state_dicts.
+_TIED_PAIRS = [
+    # (source_key, tied_key) — source is kept by safetensors, tied is dropped
+    ("language_model.model.embed_tokens.weight", "language_model.lm_head.weight"),
+]
+
+
+def _restore_tied_weights(state: Dict[str, torch.Tensor]) -> None:
+    """Restore weight-tied keys that safetensors deduplication may have dropped.
+
+    Mutates *state* in-place.  Only acts when the source key is present and
+    the tied key is absent — never overwrites an existing key.
+    """
+    for src_key, tied_key in _TIED_PAIRS:
+        if src_key in state and tied_key not in state:
+            state[tied_key] = state[src_key]
+
 
 # ---------------------------------------------------------------------------
 # Core merge logic (importable for tests)
@@ -246,10 +265,6 @@ def _load_original_llm(model_name: str, device: str, dtype: torch.dtype) -> Dict
         device_map=device,
     )
     state = {k: v.detach().cpu() for k, v in model.state_dict().items()}
-    tied = set(getattr(model, '_tied_weights_keys', None) or [])
-    for k in tied:
-        state.pop(k, None)
-        
     del model
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
@@ -304,6 +319,7 @@ def _load_finetuned_vlm(checkpoint_path: str, device: str, token: str = "") -> D
             gc.collect()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
+            _restore_tied_weights(state)
             return state
 
         except (ValueError, OSError) as exc:
@@ -352,7 +368,9 @@ def _load_finetuned_vlm(checkpoint_path: str, device: str, token: str = "") -> D
                     chunk = chunk["model"]
                 state.update(chunk)
 
-        return {k: v.detach().cpu() for k, v in state.items()}
+        state = {k: v.detach().cpu() for k, v in state.items()}
+        _restore_tied_weights(state)
+        return state
 
     # ------------------------------------------------------------------ #
     # Case 2: directory with raw weight files                             #
@@ -390,7 +408,9 @@ def _load_finetuned_vlm(checkpoint_path: str, device: str, token: str = "") -> D
     if isinstance(state, dict) and "model" in state:
         state = state["model"]
 
-    return {k: v.detach().cpu() for k, v in state.items()}
+    state = {k: v.detach().cpu() for k, v in state.items()}
+    _restore_tied_weights(state)
+    return state
 
 
 def _save_outputs(
