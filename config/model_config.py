@@ -80,7 +80,7 @@ class TinyAyaVisionConfig(PretrainedConfig):
         self._text_config_obj = None
         super().__init__(torch_dtype=torch_dtype, **kwargs)
 
-    def get_text_config(self, decoder: bool = False) -> "PretrainedConfig":
+    def get_text_config(self, decoder: bool = False, **kwargs) -> "PretrainedConfig":
         """Return a proper PretrainedConfig for the LLM sub-model.
 
         Required by transformers >=4.49 for GenerationConfig and DynamicCache
